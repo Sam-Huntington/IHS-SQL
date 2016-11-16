@@ -1,0 +1,38 @@
+--USE SH_EAST
+Select sub."Zone", sub.Report_Year, sub.HeatrateText,
+	Sum( sub.Capacity) as SumCapacity, Avg( sub.Full_Load_Heat_Rate) as AvgFull_Load_Heat_Rate,
+	Avg( sub.Dispatch_Cost) as AvgDispatch_Cost,Sum( sub.Output_MWH) as SumOutput_MWH, 
+	Avg( sub.Percent_Marginal) as AvgPercent_Marginal,Sum( sub.Revenue) as SumRevenue, 
+	Sum( sub.Energy_Revenue) as SumEnergy_Revenue, Sum( sub.Capacity_Revenue) as SumCapacity_Revenue, 
+	Avg( sub.Capacity_Factor) as AvgCapacity_Factor, Sum( sub.Total_Emission_Cost) as SumTotal_Emission_Cost,
+	Sum( sub.Startups) as SumStartups, Sum( sub.Startup_Cost) as SumStartup_Cost,
+	Sum( sub.Total_Fuel_Cost) as SumTotal_Fuel_Cost, Sum( sub.Variable_OM_Cost) as SumVariable_OM_Cost
+FROM  ( Select *,
+			CASE WHEN Full_Load_Heat_Rate >= 11999 AND (Primary_Fuel like '%GasGT%' OR Primary_Fuel like '%GasST%') THEN 'Gas CT/ST @12000+'
+				WHEN Full_Load_Heat_Rate <= 12000 AND Full_Load_Heat_Rate >= 10499 AND (Primary_Fuel like '%GasGT%' OR Primary_Fuel like '%GasST%') THEN 'Gas CT/ST @11999-10500'
+				When Full_Load_Heat_Rate <= 10499 AND Full_Load_Heat_Rate >= 0 AND Name Like '%New Resour%' AND (Primary_Fuel like '%GasGT%' OR Primary_Fuel like '%GasST%') THEN 'New Gas CT/ST @10500-'
+				When Full_Load_Heat_Rate <= 10499 AND Full_Load_Heat_Rate >= 0 AND (Primary_Fuel like '%GasGT%' OR Primary_Fuel like '%GasST%') THEN 'New Gas CT/ST @10500-'
+				When Full_Load_Heat_Rate  >= 7500 AND Primary_Fuel like '%GasCC%' THEN 'Gas CC @7500+'
+				When Full_Load_Heat_Rate  < 7500 AND Full_Load_Heat_Rate >= 0 AND Primary_Fuel like '%GasCC%' THEN 'Gas CC @7499-'
+				When Full_Load_Heat_Rate  >= 10500 AND (Primary_Fuel like '%COALST%' OR Primary_Fuel like '%Coal-%') THEN 'Coal @10500+'
+				When Full_Load_Heat_Rate  < 10500 AND Full_Load_Heat_Rate >= 0 AND (Primary_Fuel like '%COALST%' OR Primary_Fuel like '%Coal-%') THEN 'Coal @10499-'
+				When Full_Load_Heat_Rate  >= 0 AND (Primary_Fuel like '%CoalCCS%' OR Primary_Fuel like '%CoalIGCC%') THEN 'Coal CCS'
+				When Primary_Fuel like 'FO%' OR Primary_Fuel like 'OT%' THEN 'Oil'
+				When Primary_Fuel like '%BIO%' THEN 'Bio'
+				When Primary_Fuel like '%UR%' THEN 'Nuclear'
+				When Primary_Fuel like '%Wind-%' THEN 'WindOn'
+				When Primary_Fuel like '%Windoff%' THEN 'Windoff'
+				When Primary_Fuel like '%SUNPV%' THEN 'SunPV'
+				When Primary_Fuel like 'battery' AND Capacity > 0 THEN 'Battery'
+				When Primary_Fuel like '%SUNCSP%' THEN 'SunCSP'
+				When Primary_Fuel like '%WATER%' OR Primary_Fuel like '%PS%' THEN 'Hydro'
+				--When Primary_Fuel like '%Conservation%' THEN 'Conservation'
+				When Primary_Fuel like '%GEO%' THEN 'Geo'
+				--When Primary_Fuel like '%OT%' THEN 'Other'
+				--When Primary_Fuel like '%Dispatch%' THEN 'Dispatchable Demand'
+				--When Primary_Fuel like '%Demand%' THEN 'Aurora demand'
+				ELSE 'Error fuel type' END AS HeatrateText
+		FROM ResourceYear1) sub
+WHERE sub.Condition Like 'average' And  sub.Capacity > 0 AND NOT sub.HeatrateText = 'Error fuel type'
+Group By  sub."Zone",  sub.Report_Year, sub.HeatrateText
+Order By sub.HeatrateText, sub.Report_Year, Zone
