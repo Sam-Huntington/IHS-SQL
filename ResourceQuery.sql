@@ -16,6 +16,8 @@ IF object_id(N'tempdb..#temp2') IS NOT NULL
 	DROP TABLE #temp2
 IF object_id(N'tempdb..#temp3') IS NOT NULL
 	DROP TABLE #temp3
+IF object_id(N'tempdb..#annual') IS NOT NULL
+	DROP TABLE #annual
 
 
 --Combine RMT and Resource tables into #temp
@@ -54,10 +56,37 @@ LEFT JOIN #temp2 as t2 on t2.region = t1.[Heat_Rate]
 --Replace annual capacity vectors with scalars (simple average)
 ---------------
 
-SELECT ID, _2009, _2010, _2011, _2012 --(Cast([_2009] as nvarchar) + cast([_2010] as nvarchar)) as average
-FROM _Input_Annual_Vectors_Autonomy1
+--SELECT ID, _2009, _2010, _2011, _2012 --(Cast([_2009] as nvarchar) + cast([_2010] as nvarchar)) as average
+--FROM _Input_Annual_Vectors_Autonomy1
 	
-	
+
+--INSERT INTO #annual2
+--	(ID,Year,Val)
+SELECT 'yr_' + ID as ID, right(Year, len(Year)-1) as Year, Val
+INTO #annual
+FROM 
+	(SELECT ID, 
+			_2010,
+			_2011,_2012,_2013,_2014,_2015,_2016,_2017,_2018,_2019,_2020,
+			_2021,_2022,_2023,_2024,_2025,_2026,_2027,_2028,_2029,_2030,
+			_2031,_2032,_2033,_2034,_2035,_2036,_2037,_2038,_2039,_2040,
+			_2041,_2042,_2043,_2044,_2045,_2046,_2047,_2048,_2049,_2050,
+			_2051,_2052,_2053
+	FROM [_Input_Annual_Vectors_Autonomy1] where ID like '%DSM%') p
+UNPIVOT
+	(Val FOR Year IN 
+			(_2010,
+			_2011,_2012,_2013,_2014,_2015,_2016,_2017,_2018,_2019,_2020,
+			_2021,_2022,_2023,_2024,_2025,_2026,_2027,_2028,_2029,_2030,
+			_2031,_2032,_2033,_2034,_2035,_2036,_2037,_2038,_2039,_2040,
+			_2041,_2042,_2043,_2044,_2045,_2046,_2047,_2048,_2049,_2050,
+			_2051,_2052,_2053)
+)AS unpvt
+
+SELECT ID, Avg(Val)
+FROM #annual
+Group By ID	
+
 
 /*
 SELECT *
