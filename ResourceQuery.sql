@@ -56,12 +56,6 @@ LEFT JOIN #temp2 as t2 on t2.region = t1.[Heat_Rate]
 --Replace annual capacity vectors with scalars (simple average)
 ---------------
 
---SELECT ID, _2009, _2010, _2011, _2012 --(Cast([_2009] as nvarchar) + cast([_2010] as nvarchar)) as average
---FROM _Input_Annual_Vectors_Autonomy1
-	
-
---INSERT INTO #annual2
---	(ID,Year,Val)
 SELECT 'yr_' + ID as ID, right(Year, len(Year)-1) as Year, Val
 INTO #annual
 FROM 
@@ -72,7 +66,7 @@ FROM
 			_2031,_2032,_2033,_2034,_2035,_2036,_2037,_2038,_2039,_2040,
 			_2041,_2042,_2043,_2044,_2045,_2046,_2047,_2048,_2049,_2050,
 			_2051,_2052,_2053
-	FROM [_Input_Annual_Vectors_Autonomy1] where ID like '%DSM%') p
+	FROM [_Input_Annual_Vectors_Autonomy1] where ID like '%DSM%') p 
 UNPIVOT
 	(Val FOR Year IN 
 			(_2010,
@@ -83,7 +77,7 @@ UNPIVOT
 			_2051,_2052,_2053)
 )AS unpvt
 
-SELECT ID, Avg(Val)
+SELECT ID, Avg(Cast(Val as float))
 FROM #annual
 Group By ID	
 
