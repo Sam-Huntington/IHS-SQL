@@ -1,0 +1,440 @@
+USE [AURORA]
+GO
+/****** Object:  StoredProcedure [dbo].[SP_PP_ResourceQuery]    Script Date: 11/29/2016 11:47:45 AM ******/
+SET ANSI_NULLS ON
+GO
+SET QUOTED_IDENTIFIER ON
+GO
+ALTER PROCEDURE [dbo].[SP_PP_ResourceQuery]
+/* 
+   ! >>Parameters: 
+   ! 1) Database Name
+   ! 2) RMT EAST Table Name
+   ! 3) RMT WEST Table Name
+   ! 4) RMT ERCOT Table Name
+   ! 5) Resources Table Name
+   ! 6) Scenario (RIV, AUT, VER)
+   ! 7) Date for SummerYear definition
+   ! 8) Year for Add/Retire cutoff
+   ! 9) Query type (the way the data is grouped)
+   !	
+   ! >>In short, this query consolidates the RMT and resources
+   !	tables, unpacks and averages any annual vectors in those
+   !	tables, aggregates resources into key resource groups, and
+   !	then groups the resulting output in several different ways 
+   !
+   ! >>Create Table:
+   ! Area          INT,
+   ! More...
+   !
+   ! >>Version 1.01 by SH (11/29/2016)
+   
+*/
+	-- List all input parameters of the SP with their respective variable type
+    @dbname			nvarchar(50),
+	@tbl_east		nvarchar(50),
+	@tbl_west		nvarchar(50),
+	@tbl_ercot		nvarchar(50),
+	@tbl_resources	nvarchar(50),
+	@scen			nvarchar(50),
+	@SummerYearDate	date,
+	@AddRetireCutoff nvarchar(10),
+	@query_type		int
+
+AS
+    SET NOCOUNT ON
+    SET XACT_ABORT ON
+
+	/*Validate the database name exists*/
+    IF DB_ID(@dbname) IS NULL  
+       BEGIN
+       RAISERROR('Invalid Database Name passed',16,1)
+       RETURN
+       END
+	
+	DECLARE @WinterYearDate nvarchar(50)
+	SET @WinterYearDate = Cast(Cast((datepart(year,@SummerYearDate)+1) as varchar(4))+'/01/01' as Date)
+
+	DECLARE @scenlong nvarchar(10)
+	DECLARE @YrVectTbl nvarchar(50)
+	DECLARE @MnVectTbl nvarchar(50)
+	DECLARE @WkVectTbl nvarchar(50)
+	IF @scen = 'RIV' BEGIN set @scenlong = 'Rivalry' END
+	IF @scen = 'AUT' BEGIN set @scenlong = 'Autonomy' END
+	IF @scen = 'VER' BEGIN set @scenlong = 'Vertigo' END
+	SET @YrVectTbl = '_Input_Annual_Vectors_'+@scenlong+'1'
+	SET @MnVectTbl = '_Input_Monthly_Vectors_'+@scenlong+'1'
+	SET @WkVectTbl = '_Input_Weekly_Vectors_'+@scenlong+'1'
+
+	CREATE TABLE #resources
+	(
+		ID			nvarchar(50),
+		Name		nvarchar(100),
+		RBD			Date,
+		RED			Date,
+		Capacity	nvarchar(50),
+		Heat_Rate	nvarchar(50),
+		Fuel		nvarchar(50),
+		Area		Int,
+		Peak_Credit	nvarchar(50),
+		Aurora_Zone	nvarchar(100)
+	)
+
+	INSERT INTO #resources EXECUTE AURORA.dbo.SP_PP_ReturnTable @dbname, @tbl_east, 'ID','Name','Resource_Begin_Date',
+		'Resource_End_Date','Capacity','Heat_Rate','Fuel','Area','Peak_Credit','zREM_AURORA_Zone_Name' --, 'zREM_Online_Year'
+	INSERT INTO #resources EXECUTE AURORA.dbo.SP_PP_ReturnTable @dbname, @tbl_west, 'ID','Name','Resource_Begin_Date',
+		'Resource_End_Date','Capacity','Heat_Rate','Fuel','Area','Peak_Credit','zREM_AURORA_Zone_Name' --, 'zREM_Online_Year'
+	INSERT INTO #resources EXECUTE AURORA.dbo.SP_PP_ReturnTable @dbname, @tbl_ercot, 'ID','Name','Resource_Begin_Date',
+		'Resource_End_Date','Capacity','Heat_Rate','Fuel','Area','Peak_Credit','zREM_AURORA_Zone_Name' --, 'zREM_Online_Year'
+	INSERT INTO #resources EXECUTE AURORA.dbo.SP_PP_ReturnTable @dbname, @tbl_resources, 'ID','Name','Resource_Begin_Date',
+		'Resource_End_Date','Capacity','Heat_Rate','Fuel','Area','Peak_Credit','zREM_AURORA_Zone_Name' --, 'zREM_Online_Year'
+
+	CREATE TABLE #temp
+	(
+	ID		nvarchar(100),
+	Year	nvarchar(50),
+	Val		nvarchar(50)
+	)
+
+	DECLARE @dynsql nvarchar(max)  
+	SET @dynsql = 	
+	'SELECT * 
+	INTO #relevant_yr_vect
+	--SELECT *
+	FROM (
+		SELECT Capacity as VectorName
+		FROM #resources as r
+		WHERE LEFT(r.Capacity,3) = ''yr_'') a
+	JOIN ['+@dbname+'].[dbo].['+@YrVectTbl+'] as i1 on ''yr_'' + i1.ID = a.VectorName
+	INSERT INTO #relevant_yr_vect
+	SELECT * 
+	FROM (
+		--sometimes heat_rate is also based on a yearly vector
+		SELECT Heat_Rate as VectorName
+		FROM #resources as r
+		WHERE LEFT(r.Heat_Rate,3) = ''yr_'') a
+	JOIN ['+@dbname+'].[dbo].['+@YrVectTbl+'] as i1 on ''yr_'' + i1.ID = a.VectorName
+	
+	SELECT ''yr_'' + ID as ID, right(Year, len(Year)-1) as Year, Val
+	INTO #annual
+	FROM 
+		(SELECT ID, 
+				_2010,
+				_2011,_2012,_2013,_2014,_2015,_2016,_2017,_2018,_2019,_2020,
+				_2021,_2022,_2023,_2024,_2025,_2026,_2027,_2028,_2029,_2030,
+				_2031,_2032,_2033,_2034,_2035,_2036,_2037,_2038,_2039,_2040,
+				_2041,_2042,_2043,_2044,_2045,_2046,_2047,_2048,_2049,_2050,
+				_2051,_2052,_2053
+		FROM #relevant_yr_vect) p 
+	UNPIVOT
+		(Val FOR Year IN 
+				(_2010,
+				_2011,_2012,_2013,_2014,_2015,_2016,_2017,_2018,_2019,_2020,
+				_2021,_2022,_2023,_2024,_2025,_2026,_2027,_2028,_2029,_2030,
+				_2031,_2032,_2033,_2034,_2035,_2036,_2037,_2038,_2039,_2040,
+				_2041,_2042,_2043,_2044,_2045,_2046,_2047,_2048,_2049,_2050,
+				_2051,_2052,_2053)
+	)AS unpvt
+
+	SELECT * FROM #annual
+	'
+	INSERT INTO #temp EXEC sp_executesql @dynsql
+
+
+	CREATE TABLE #IHS_HeatRate
+	(ID				varchar(100),
+	Heat_Rate		nvarchar(100))
+
+	DECLARE @dynsql2 nvarchar(max)  
+	SET @dynsql2 = 'SELECT ID, Heat_Rate FROM ['+@dbname+'].[dbo].[_Input_HeatRate_IHS1]'
+	INSERT INTO #IHS_HeatRate EXEC sp_executesql @dynsql2
+
+	UPDATE #resources
+	SET #resources.[Heat_Rate] = 
+		(CASE WHEN LEFT(#resources.Heat_Rate,3) = 'hrd' THEN CAST(a.Avg_HeatRate as varchar) ELSE CAST(#resources.Heat_Rate as varchar) END)
+	FROM
+		(SELECT ('hrd_' + h.ID) as region, avg(cast(h.[Heat_Rate] as float)) as Avg_HeatRate
+		FROM #resources as r
+		INNER JOIN #IHS_HeatRate as h on r.[Heat_Rate] = ('hrd_' + h.ID)
+		GROUP BY h.ID) a
+	
+	UPDATE #resources															
+	SET #resources.Capacity = (CASE WHEN LEFT(#resources.Capacity,3) = 'yr_' THEN Cast(a.Val as varchar) ELSE #resources.Capacity END)
+	FROM 
+		(SELECT ID, Avg(Cast(Val as float)) as Val
+		FROM #temp
+		Group By ID) a
+
+	UPDATE #resources 
+	SET #resources.Heat_Rate = (CASE WHEN LEFT(#resources.Heat_Rate,3) = 'yr_' THEN a.Val ELSE #resources.Heat_Rate END)
+	FROM 
+		(SELECT ID, Avg(Cast(Val as float)) as Val
+		FROM #temp
+		Group By ID) a
+
+	ALTER TABLE #resources ADD SummerOnlineYear int NULL
+	UPDATE #resources SET SummerOnlineYear = (CASE WHEN datepart(month, RBD)>6 THEN CAST(datepart(year, RBD) as Int)+1 ELSE Cast(datepart(year, RBD) as Int) END) 
+
+	ALTER TABLE #resources ADD SummerOfflineYear int NULL
+	UPDATE #resources SET SummerOfflineYear = (CASE WHEN datepart(month, RED)>6 THEN CAST(datepart(year, RED) as Int)+1 ELSE Cast(datepart(year, RED) as Int)  END)
+
+	ALTER TABLE #resources ADD OfflineYear Int NULL
+	UPDATE #resources SET OfflineYear = CAST(Datepart(year, RED) as Int)
+
+	ALTER TABLE #resources ADD OnlineYear Int NULL
+	UPDATE #resources SET OnlineYear = CAST(Datepart(year, RBD) as Int)
+
+	ALTER TABLE #resources ADD SummerBaseFlag Int NULL
+	UPDATE #resources SET SummerBaseFlag = (CASE WHEN (RED > Dateadd(day,-1,@Summeryeardate) AND RBD < @Summeryeardate) THEN 1 ELSE 0 END)
+
+	ALTER TABLE #resources ADD WinterBaseFlag Int NULL
+	UPDATE #resources SET WinterBaseFlag = (CASE WHEN (RED > Dateadd(day,-1,@WinterYeardate) AND RBD < @WinteryearDate) THEN 1 ELSE 0 END)
+
+	ALTER TABLE #resources ADD AddType varchar(40) NULL
+	UPDATE #resources SET AddType = (CASE 
+									WHEN Name LIKE '%CERA D%' THEN 'CERA Dispatch'  
+									WHEN Name LIKE '%demand%' THEN 'Demand Side Aurora'
+									WHEN Name LIKE '%ExpansionTK%' THEN 'manual/model'
+									WHEN Name LIKE '%GM%' THEN 'manual/model'
+									WHEN Name LIKE '%New Resource%' THEN 'Aurora'
+									ELSE 'Existing'
+								END)
+	
+	ALTER TABLE #resources ADD FuelTypeGroup varchar(40) NULL
+	UPDATE #resources SET FuelTypeGroup = (CASE 
+									WHEN AddType LIKE 'CERA Dispatch' THEN 'CERA Dispatch'
+									WHEN Name LIKE '%Demand%' THEN 'Demand'
+									WHEN (Fuel LIKE '%GASGT%' OR Fuel LIKE '%GASST%') AND Heat_Rate >= '12000' THEN 'GAS CT/ST @12000+'  
+									WHEN (Fuel LIKE '%GASGT%' OR Fuel LIKE '%GASST%') AND (Heat_Rate < '12000' AND Heat_Rate >= '10500') THEN 'GAS CT/ST @11999-10500'  
+									WHEN (Fuel LIKE '%GASGT%' OR Fuel LIKE '%GASST%') AND Heat_Rate < '10500' THEN 'GAS CT/ST @10500-'  
+									WHEN Fuel LIKE '%GASCC%' AND Heat_Rate >= '7500' THEN 'GAS CC @7500+'
+									WHEN Fuel LIKE '%GASCC%' AND Heat_Rate < '7500' THEN 'GAS CC @7499-'
+									WHEN Fuel LIKE '%COALIGCC%' OR Fuel LIKE '%COALCCS%' THEN 'Coal CCS'
+									WHEN (Fuel LIKE '%COALST%' OR Fuel LIKE '%COAL-%') AND Heat_rate >= '10500' THEN 'COAL @10500+'
+									WHEN (Fuel LIKE '%COALST%' OR Fuel LIKE '%COAL-%') AND Heat_rate < '10500' THEN 'COAL @10499-'
+									WHEN Fuel LIKE '%BIO%' THEN 'BIO'
+									WHEN Fuel LIKE '%GEO%' THEN 'GEO'
+									WHEN Fuel LIKE '%WAT%' THEN 'HYDRO'
+									WHEN Fuel LIKE '%PS%' THEN 'PS'
+									WHEN Fuel LIKE '%UR%' THEN 'NUKE'
+									WHEN Fuel LIKE '%SUNPV%' THEN 'SolarPV'
+									WHEN Fuel LIKE '%SUNCSP%' THEN 'SolarCSP'
+									WHEN Fuel LIKE '%OT%' OR Fuel LIKE '%FO%' THEN 'Oil'
+									WHEN Fuel LIKE '%WINDOFF%' THEN 'Wind Offshore'
+									WHEN Fuel LIKE '%WIND-%' THEN 'Wind Onshore'
+									WHEN Fuel LIKE '%Battery%' THEN 'Battery'
+									WHEN Fuel LIKE '%CONSRV%' THEN 'PHEV'
+									ELSE '??'
+								END)
+	
+	
+	--Resources_add
+	IF @query_type = 1
+		BEGIN
+		SELECT SummerOnlineYear, OnlineYear, Area, Aurora_Zone, AddType, FuelTypeGroup, Avg(Cast(Peak_Credit as decimal)) as Avg_Peak_Credit, Sum(Cast(Capacity as decimal)) as Total_Capacity 
+		FROM #resources 
+		WHERE OnlineYear > @AddRetireCutoff --!!!
+		GROUP BY SummerOnlineYear, OnlineYear, Aurora_Zone, AddType, FuelTypeGroup, Area
+		END
+
+	--Resources_retire
+	IF @query_type = 2
+		BEGIN
+		SELECT SummerOnlineYear, OfflineYear, Area, Aurora_Zone, AddType, FuelTypeGroup, Avg(Cast(Peak_Credit as decimal)) as Avg_Peak_Credit, Sum(Cast(Capacity as decimal)) as Total_Capacity 
+		FROM #resources 
+		WHERE OfflineYear > @AddRetireCutoff
+		GROUP BY SummerOnlineYear, OfflineYear, Aurora_Zone, AddType, FuelTypeGroup, Area
+		END
+
+	--Resources_base_summer
+	IF @query_type = 3
+		BEGIN
+		SELECT SummerOnlineYear, Area, Aurora_Zone, AddType, FuelTypeGroup, Avg(Cast(Peak_Credit as decimal)) as Avg_Peak_Credit, Sum(Cast(Capacity as decimal)) as Total_Capacity 
+		FROM #resources 
+		WHERE SummerBaseFlag <> '0'
+		GROUP BY SummerOnlineYear, Aurora_Zone, AddType, FuelTypeGroup, Area
+		END
+
+	--Resources_base_winter
+	IF @query_type = 4
+		BEGIN
+		SELECT SummerOnlineYear, Area, Aurora_Zone, AddType, FuelTypeGroup, Avg(Cast(Peak_Credit as decimal)) as Avg_Peak_Credit, Sum(Cast(Capacity as decimal)) as Total_Capacity 
+		FROM #resources 
+		WHERE WinterBaseFlag <> '0'
+		GROUP BY SummerOnlineYear, Aurora_Zone, AddType, FuelTypeGroup, Area
+		END
+
+	--Print @summeryeardate
+	--Print @winteryeardate
+	DROP TABLE #temp, #resources
+
+
+/*
+	
+	UPDATE #resources
+	SET #resources.[Heat_Rate] = 
+		(CASE WHEN LEFT(#resources.Heat_Rate,3) = 'hrd' THEN CAST(a.Avg_HeatRate as varchar) ELSE CAST(#resources.Heat_Rate as varchar) END)
+	FROM
+		(SELECT ('hrd_' + h.ID) as region, avg(cast(h.[Heat_Rate] as float)) as Avg_HeatRate
+		FROM #resources as r
+		INNER JOIN [dbo].[_Input_HeatRate_IHS1] as h on r.[Heat_Rate] = ('hrd_' + h.ID)
+		GROUP BY h.ID) a
+
+	--SELECT * FROM #resources ORDER BY Heat_Rate
+
+	SELECT * 
+	INTO #relevant_yr_vect
+	FROM (
+		SELECT Capacity as VectorName
+		FROM #resources as r
+		WHERE LEFT(r.Capacity,3) = ''yr_'') a
+	JOIN [_Input_Annual_Vectors_' +@scenlong + '1] as i1 on ''yr_'' + i1.ID = a.VectorName
+	INSERT INTO #relevant_yr_vect
+	SELECT * 
+	FROM (
+		--sometimes heat_rate is also based on a yearly vector
+		SELECT Heat_Rate as VectorName
+		FROM #resources as r
+		WHERE LEFT(r.Heat_Rate,3) = ''yr_'') a
+	JOIN [_Input_Annual_Vectors_' +@scenlong + '1] as i1 on ''yr_'' + i1.ID = a.VectorName
+
+	
+
+	SELECT ''yr_'' + ID as ID, right(Year, len(Year)-1) as Year, Val
+	INTO #annual
+	FROM 
+		(SELECT ID, 
+				_2010,
+				_2011,_2012,_2013,_2014,_2015,_2016,_2017,_2018,_2019,_2020,
+				_2021,_2022,_2023,_2024,_2025,_2026,_2027,_2028,_2029,_2030,
+				_2031,_2032,_2033,_2034,_2035,_2036,_2037,_2038,_2039,_2040,
+				_2041,_2042,_2043,_2044,_2045,_2046,_2047,_2048,_2049,_2050,
+				_2051,_2052,_2053
+		FROM #relevant_yr_vect) p 
+	UNPIVOT
+		(Val FOR Year IN 
+				(_2010,
+				_2011,_2012,_2013,_2014,_2015,_2016,_2017,_2018,_2019,_2020,
+				_2021,_2022,_2023,_2024,_2025,_2026,_2027,_2028,_2029,_2030,
+				_2031,_2032,_2033,_2034,_2035,_2036,_2037,_2038,_2039,_2040,
+				_2041,_2042,_2043,_2044,_2045,_2046,_2047,_2048,_2049,_2050,
+				_2051,_2052,_2053)
+	)AS unpvt
+
+	IF (SELECT COUNT(*) FROM #annual WHERE left(Val,3) = ''mn_'') > 0			
+		BEGIN																	
+			SELECT * 
+			INTO #relevant_mn_vect
+			FROM 
+				(SELECT Val as VectorName
+				FROM #annual as a
+				WHERE LEFT(a.Val,3) = ''mn_'') a
+			JOIN [_Input_Monthly_Vectors_' +@scenlong + '1] as i1 on ''mn_'' + i1.ID = a.VectorName
+
+			SELECT ''mn_'' + ID as ID, right(Month, len(Month)-1) as Month, Val	
+			INTO #month
+			FROM 
+				(SELECT ID, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12
+				FROM #relevant_mn_vect) p
+			UNPIVOT 
+				(Val FOR Month IN
+					(_1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12)
+				) AS unpvt
+		
+			IF (SELECT COUNT(*) FROM #month WHERE left(Val,3) = ''wk_'') > 0		
+				BEGIN  															
+					SELECT * 
+					INTO #relevant_wk_vect
+					FROM 
+						(SELECT Val as VectorName
+						FROM #month as a
+						WHERE LEFT(a.Val,3) = ''wk_'') a
+					JOIN [_Input_Weekly_Vectors_' +@scenlong + '1] as i1 on ''wk_'' + i1.ID = a.VectorName
+				
+					SELECT ''wk_'' + ID as ID, right(Week, len(Week)-1) as Month, Val	
+					INTO #week
+					FROM 
+						(SELECT ID,  _1, _2, _3, _4, _5, _6, _7, _8, _9,_10,
+					   _11, _12, _13, _14, _15, _16, _17, _18, _19,_20,
+					   _21, _22, _23, _24, _25, _26, _27, _28, _29,_30,
+					   _31, _32, _33, _34, _35, _36, _37, _38, _39,_40,
+					   _51, _52, _53, _54, _55, _56, _57, _58, _59,_50,
+					   _61, _62, _63, _64, _65, _66, _67, _68, _69,_70,
+					   _71, _72, _73, _74, _75, _76, _77, _78, _79,_80,
+					   _81, _82, _83, _84, _85, _86, _87, _88, _89,_90,
+					   _91, _92, _93, _94, _95, _96, _97, _98, _99,_100,
+					   _101, _102, _103, _104, _105, _106, _107, _108, _109,_110,
+					   _111, _112, _113, _114, _115, _116, _117, _118, _119,_120,
+					   _121, _122, _123, _124, _125, _126, _127, _128, _129,_130,
+					   _131, _132, _133, _134, _135, _136, _137, _138, _139,_140,
+					   _141, _142, _143, _144, _145, _146, _147, _148, _149,_150,
+					   _151, _152, _153, _154, _155, _156, _157, _158, _159,_160,
+					   _161, _162, _163, _164, _165, _166, _167, _168
+						FROM #relevant_wk_vect) p
+					UNPIVOT 
+						(Val FOR Week IN
+							( _1, _2, _3, _4, _5, _6, _7, _8, _9,_10,
+					   _11, _12, _13, _14, _15, _16, _17, _18, _19,_20,
+					   _21, _22, _23, _24, _25, _26, _27, _28, _29,_30,
+					   _31, _32, _33, _34, _35, _36, _37, _38, _39,_40,
+					   _51, _52, _53, _54, _55, _56, _57, _58, _59,_50,
+					   _61, _62, _63, _64, _65, _66, _67, _68, _69,_70,
+					   _71, _72, _73, _74, _75, _76, _77, _78, _79,_80,
+					   _81, _82, _83, _84, _85, _86, _87, _88, _89,_90,
+					   _91, _92, _93, _94, _95, _96, _97, _98, _99,_100,
+					   _101, _102, _103, _104, _105, _106, _107, _108, _109,_110,
+					   _111, _112, _113, _114, _115, _116, _117, _118, _119,_120,
+					   _121, _122, _123, _124, _125, _126, _127, _128, _129,_130,
+					   _131, _132, _133, _134, _135, _136, _137, _138, _139,_140,
+					   _141, _142, _143, _144, _145, _146, _147, _148, _149,_150,
+					   _151, _152, _153, _154, _155, _156, _157, _158, _159,_160,
+					   _161, _162, _163, _164, _165, _166, _167, _168)
+						) AS unpvt
+				
+					UPDATE #month														
+					SET #month.Val = (CASE WHEN LEFT(#month.Val,3) = ''wk_'' THEN w.Val ELSE #month.Val END)
+					FROM																
+						(SELECT ID, Avg(Cast(Val as float)) as Val
+						FROM #week
+						Group By ID) w
+				END
+
+			--had to add this in to get around special case varchars that pass ISNUMERIC by cannot be cast to float (i.e., $x,xxx)
+			UPDATE #annual	
+			SET #annual.Val = (CASE WHEN ISNUMERIC(#annual.Val) <>1 AND NOT LEFT(#annual.Val,3) = ''mn_'' THEN ''0'' ELSE #annual.Val END)
+		
+			UPDATE #annual														
+			SET #annual.Val = (CASE WHEN LEFT(#annual.Val,3) = ''mn_'' THEN CAST(m.avgVal as varchar) ELSE #annual.Val END)
+			FROM																
+				(SELECT ID, Avg(Cast(Val as float)) as avgVal
+				FROM #month
+				Group By ID) m
+		
+			UPDATE #annual	
+			SET #annual.Val = TRY_CONVERT(numeric, #annual.Val) 
+
+		END
+	ELSE
+
+	UPDATE #resources															
+	SET #resources.Capacity = (CASE WHEN LEFT(#resources.Capacity,3) = ''yr_'' THEN Cast(a.Val as varchar) ELSE #resources.Capacity END)
+	FROM 
+		(SELECT ID, Avg(Cast(Val as float)) as Val
+		FROM #annual
+		Group By ID) a
+
+	UPDATE #resources 
+	SET #resources.Heat_Rate = (CASE WHEN LEFT(#resources.Heat_Rate,3) = ''yr_'' THEN a.Val ELSE #resources.Heat_Rate END)
+	FROM 
+		(SELECT ID, Avg(Cast(Val as float)) as Val
+		FROM #annual
+		Group By ID) a
+
+	SELECT * FROM #resources
+
+	DROP TABLE #relevant_yr_vect, #annual, #month, #week, #relevant_mn_vect, #relevant_wk_vect, #resources
+	'
+*/
+	--Print dynamic sql statement for debugging (goes to messages), comment when done
+	--print @dynsql;
+	
